@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">VulkanSight</string>
+    <string name="loading">Loading model…</string>
+</resources>

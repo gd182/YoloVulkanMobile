@@ -1,0 +1,22 @@
+VulkanSight
+Copyright 2026 VulkanSight contributors
+
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+--------------------------------------------------------------------------------
+This product bundles third-party components under their own licenses:
+
+* ncnn — https://github.com/Tencent/ncnn
+  Copyright (C) THL A29 Limited, a Tencent company.
+  BSD 3-Clause License. Prebuilt `android-vulkan` release under
+  app/src/main/cpp/ncnn/ (includes statically linked glslang / SPIRV-Tools,
+  BSD/Apache-2.0/MIT, and Khronos Vulkan headers, Apache-2.0).
+
+* YOLO model weights (app/src/main/assets/*.param, *.bin) are NOT part of this
+  repository (git-ignored). If you add weights converted from Ultralytics YOLO
+  (https://github.com/ultralytics/ultralytics), note they are AGPL-3.0:
+  copyleft and incompatible with distributing this app as a whole under
+  Apache-2.0. Use them for local testing only. Before publishing or
+  redistributing the app, use a model under a permissive license (e.g.
+  NanoDet, YOLOX, RT-DETR — Apache-2.0) or obtain an Ultralytics Enterprise
+  License.

@@ -1,0 +1,54 @@
+# Android / Gradle / Kotlin
+*.iml
+.gradle/
+.kotlin/
+/build/
+/app/build/
+/app/.cxx/
+/captures/
+.externalNativeBuild/
+.cxx/
+release/
+
+# Build artifacts
+*.apk
+*.aab
+*.ap_
+*.hprof
+
+# Model weights are NOT committed: the YOLOv8 exports are AGPL-3.0, and
+# keeping them out lets the source repo stay Apache-2.0. Drop your own
+# .param / .bin into app/src/main/assets/ — see that folder's README.
+# (models.json and coco.txt ARE tracked.)
+/app/src/main/assets/*.param
+/app/src/main/assets/*.bin
+
+# The ncnn prebuilt under app/src/main/cpp/ncnn/ IS tracked (BSD-3-Clause);
+# the app does not build without it. Use Git LFS if the size is a problem.
+
+# Local config
+local.properties
+keystore.properties
+*.keystore
+*.jks
+
+# IDE — Android Studio
+/.idea/*
+!/.idea/codeStyles/
+!/.idea/inspectionProfiles/
+*.iws
+.navigation/
+
+# Python (ultralytics / yolo export tooling)
+.venv*/
+__pycache__/
+*.pyc
+
+# OS
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Logs
+*.log
