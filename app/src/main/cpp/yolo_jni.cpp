@@ -76,8 +76,25 @@ Java_com_example_yolovulkanmobile_YoloNcnn_nativeInit(
         g_yolo = nullptr;
         return JNI_FALSE;
     }
-    LOGI("model loaded, gpu=%d", g_yolo->has_gpu());
+    LOGI("model loaded, gpu=%d, weight_precision=%s",
+         g_yolo->has_gpu(), g_yolo->weight_precision().c_str());
     return JNI_TRUE;
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_example_yolovulkanmobile_YoloNcnn_nativePrecision(JNIEnv* env, jobject)
+{
+    std::lock_guard<std::mutex> lk(g_lock);
+    const char* precision = g_yolo ? g_yolo->weight_precision().c_str() : "UNKNOWN";
+    return env->NewStringUTF(precision);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_example_yolovulkanmobile_YoloNcnn_nativeRelease(JNIEnv*, jobject)
+{
+    std::lock_guard<std::mutex> lk(g_lock);
+    delete g_yolo;
+    g_yolo = nullptr;
 }
 
 extern "C" JNIEXPORT jboolean JNICALL

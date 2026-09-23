@@ -19,9 +19,20 @@ release/
 # Model weights are NOT committed: the YOLOv8 exports are AGPL-3.0, and
 # keeping them out lets the source repo stay Apache-2.0. Drop your own
 # .param / .bin into app/src/main/assets/ — see that folder's README.
-# (models.json and coco.txt ARE tracked.)
+# models.json is local; models.example.json and labels.txt are tracked.
+/app/src/main/assets/models.json
 /app/src/main/assets/*.param
 /app/src/main/assets/*.bin
+
+# Local conversion inputs and generated model artifacts
+/calibration/
+*.pt
+*.onnx
+*.dlc
+*.raw
+core
+core.*
+*.core
 
 # The ncnn prebuilt under app/src/main/cpp/ncnn/ IS tracked (BSD-3-Clause);
 # the app does not build without it. Use Git LFS if the size is a problem.

@@ -41,10 +41,12 @@ public:
                float prob_threshold = 0.25f, float nms_threshold = 0.45f);
 
     bool has_gpu() const { return gpu_loaded; }
+    const std::string& weight_precision() const { return precision; }
 
 private:
     ncnn::Net yolo;
     ModelSpec spec;
+    std::string precision = "UNKNOWN";
     bool gpu_loaded = false;
     ncnn::UnlockedPoolAllocator blob_pool_allocator;
     ncnn::PoolAllocator workspace_pool_allocator;

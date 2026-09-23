@@ -23,8 +23,8 @@
 ## О проекте
 
 VulkanSight выполняет детекцию объектов YOLO на превью камеры в реальном времени.
-Инференс предпочитает GPU через Vulkan-бэкенд **ncnn**, с автоматическим
-откатом на CPU при отсутствии совместимого GPU.
+Для инференса используется **ncnn** через Vulkan/CPU или опциональный нативный
+бэкенд **Qualcomm QNN** для NPU Hexagon на поддерживаемых устройствах Snapdragon.
 
 Модели задаются в одном `models.json` в ассетах приложения - добавить или
 переключить модель можно без правок кода (см. раздел «Модели»). Поддерживаются
@@ -36,9 +36,10 @@ VulkanSight выполняет детекцию объектов YOLO на пр�
 ```
 CameraX ImageAnalysis (RGBA_8888)
   → вертикальный ARGB_8888 Bitmap              MainActivity.kt
-  → JNI                                        YoloNcnn.kt
-  → ncnn::Net  (opt.use_vulkan_compute = true) cpp/yolo.cpp
-       letterbox → forward → decode → NMS
+  → Detector (ncnn или QNN)                    Detector.kt
+  → JNI                                        YoloNcnn.kt / QnnDetector.kt
+  → ncnn::Net или QNN graphExecute             cpp/yolo.cpp / cpp/qnn_yolo.cpp
+       letterbox → inference → decode → NMS
   → float[x, y, w, h, label, score] per box
   → OverlayView рисует рамки поверх превью      OverlayView.kt
 ```
@@ -49,11 +50,14 @@ CameraX ImageAnalysis (RGBA_8888)
   распакованный по ABI в `app/src/main/cpp/ncnn/<abi>/`; CMake находит его с
   помощью `find_package(ncnn)`.
 - **Бэкенд** — выбирается Vulkan, если `ncnn::get_gpu_count() > 0`, иначе — CPU.
-  Статус-строка показывает выбранный бэкенд, FPS и задержку инференса.
+  QNN-модели показываются только при доступности QNN. Статус-строка показывает
+  выбранный бэкенд, автоматически определённую разрядность модели, FPS и задержку инференса.
 
 ## Модели
 
-Все модели описаны в `app/src/main/assets/models.json`. Выпадающий список внизу
+Все модели описаны в локальном `app/src/main/assets/models.json`. Он находится
+в `.gitignore`; для начала скопируйте `models.example.json`. Если локального
+файла нет, приложение читает отслеживаемый пример. Выпадающий список внизу
 экрана выбирает активную модель; поле `default` задаёт модель по умолчанию.
 
 Поля включают `param`, `bin`, `inputName` / `outputName`, `targetSize`,
@@ -78,6 +82,12 @@ CameraX ImageAnalysis (RGBA_8888)
 Если рамки смещены или неправильного масштаба, сначала проверьте соответствие
 `targetSize` и `imgsz` — это самая частая причина.
 
+## NPU (Qualcomm QNN)
+
+На устройствах Snapdragon модель может выполняться на NPU Hexagon через нативный QNN C API
+(`"backend": "qnn"` в `models.json`) с заранее скомпилированным context binary.
+Настройка и конвертация: [docs/QNN.ru.md](docs/QNN.ru.md).
+
 ## Сборка и запуск
 
 Требуется Android Studio (AGP 9.4.0) и NDK. `minSdk 24`, `compileSdk 37`.
@@ -87,7 +97,9 @@ CameraX ImageAnalysis (RGBA_8888)
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
-Собираемые ABI: `arm64-v8a`, `armeabi-v7a`, `x86_64`.
+Собираемые ABI: `arm64-v8a`, `armeabi-v7a`, `x86_64`. QNN доступен только в
+`arm64-v8a` и только если `qnn.sdk.dir` или `QNN_SDK_ROOT` указывает на
+совпадающую версию QAIRT SDK; в остальных сборках продолжают работать ncnn-бэкенды.
 
 Prebuilt ncnn хранится в репозитории; веса моделей в репозиторий не попадают (как их добавить, см. `app/src/main/assets/README.md`). Приложение
 собирается и запускается без весов; при отсутствии файла модель покажет
@@ -98,49 +110,30 @@ Prebuilt ncnn хранится в репозитории; веса моделе�
 ```
 app/src/main/
   java/com/example/yolovulkanmobile/
-  cpp/
-  assets/
-  res/
-```
-
-## Лицензия
-
-Apache-2.0 — см. [LICENSE](LICENSE) и [NOTICE](NOTICE).
-
-Prebuilt ncnn — BSD-3-Clause. Примеры весов `yolov8*` сконвертированы из
-Ultralytics YOLO и распространяются под AGPL-3.0; перед распространением
-замените их на модели с более мягкой лицензией, если это необходимо.
-adaptive-слои не нужны. Для страницы в Google Play дополнительно нужен PNG
-**512 × 512** (в APK не входит).
-
-Название приложения на экране — `app_name` в
-`app/src/main/res/values/strings.xml`.
-
-## Структура проекта
-
-```
-app/src/main/
-  java/com/example/yolovulkanmobile/
     MainActivity.kt        настройка CameraX, кадр → bitmap, список моделей, статус-строка
-    YoloNcnn.kt            обёртка JNI; парсит models.json в ModelSpec
+    Detector.kt            общий интерфейс детектора
+    YoloNcnn.kt            ncnn/Vulkan-реализация и разбор models.json
+    QnnDetector.kt         QNN-реализация и проверка доступности NPU
     OverlayView.kt         рисует рамки поверх превью (маппинг center-crop)
   cpp/
     CMakeLists.txt         find_package(ncnn), собирает libyolovulkan.so
     yolo.h / yolo.cpp      детектор без OpenCV: letterbox, DFL + decoded головы, NMS
     yolo_jni.cpp           JNI-мост; владеет инстансом Vulkan
+    qnn_yolo.* / qnn_jni.cpp  QNN context binary, graphExecute и JNI-мост
     ncnn/<abi>/            prebuilt ncnn android-vulkan 20260526
   assets/
-    models.json           реестр моделей
-    coco.txt              имена 80 классов COCO
-    *.param / *.bin       веса моделей
+    models.json            реестр моделей
+    labels.txt             имена 80 классов COCO
+    *.param / *.bin        локальные веса моделей (не коммитятся)
   res/layout/activity_main.xml   PreviewView + OverlayView + Spinner
+docs/                      инструкции по QNN на русском и английском
+scripts/                   конвертация моделей в QNN context binary
 ```
 
 ## Лицензия
 
 Apache-2.0 — см. [LICENSE](LICENSE) и [NOTICE](NOTICE).
 
-Prebuilt ncnn — под BSD-3-Clause. Веса `yolov8*` сконвертированы из Ultralytics
-YOLO и распространяются под **AGPL-3.0** — они лежат в репозитории только как
-рабочий пример; перед распространением приложения замени модель на
-permissive-лицензированную (NanoDet, YOLOX, RT-DETR).
+Prebuilt ncnn распространяется под BSD-3-Clause. Весов моделей в репозитории
+нет. Перед распространением приложения проверьте лицензию добавленных весов.
+Компоненты Qualcomm QNN остаются под условиями поставляемой с ними лицензии.

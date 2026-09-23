@@ -20,3 +20,10 @@ This product bundles third-party components under their own licenses:
   redistributing the app, use a model under a permissive license (e.g.
   NanoDet, YOLOX, RT-DETR — Apache-2.0) or obtain an Ultralytics Enterprise
   License.
+
+* Qualcomm AI Runtime (QNN) — com.qualcomm.qti:qnn-runtime
+  Proprietary (Qualcomm AI Stack License, shipped inside the AAR). Fetched from
+  Maven at build time and NOT committed to this repository. Redistribution is
+  governed by the license shipped with the AAR; review those terms before
+  publishing an APK. The QAIRT SDK headers used for the optional QNN build are
+  likewise not included.

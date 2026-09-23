@@ -1,0 +1,30 @@
+{
+  "default": "example-ncnn",
+  "models": [
+    {
+      "id": "example-ncnn",
+      "displayName": "Example YOLO · Vulkan",
+      "backend": "ncnn",
+      "param": "example_yolo.param",
+      "bin": "example_yolo.bin",
+      "inputName": "in0",
+      "outputName": "out0",
+      "targetSize": 640,
+      "decoded": true,
+      "bgr": false,
+      "confThreshold": 0.25,
+      "nmsThreshold": 0.45,
+      "labels": ["object-a", "object-b", "object-c"]
+    },
+    {
+      "id": "example-qnn",
+      "displayName": "Example YOLO · NPU (QNN)",
+      "backend": "qnn",
+      "model": "example_yolo_v81.bin",
+      "boxesNormalized": false,
+      "confThreshold": 0.25,
+      "nmsThreshold": 0.45,
+      "labels": ["object-a", "object-b", "object-c"]
+    }
+  ]
+}

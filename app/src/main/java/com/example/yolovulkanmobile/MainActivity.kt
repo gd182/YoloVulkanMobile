@@ -3,9 +3,9 @@ package com.example.yolovulkanmobile
 import android.Manifest
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
-import android.graphics.Matrix
 import android.os.Bundle
 import android.util.Log
+import android.view.MotionEvent
 import android.view.View
 import android.widget.AdapterView
 import android.widget.ArrayAdapter
@@ -31,11 +31,16 @@ class MainActivity : AppCompatActivity() {
     private val busy = AtomicBoolean(false)
     private var lastFpsTs = 0L
     private var frames = 0
+    private var warmupFrames = 0
+    private var cameraBitmap: Bitmap? = null
 
     private lateinit var specs: List<ModelSpec>
     @Volatile private var specIndex = 0
     private val switching = AtomicBoolean(false)
-    private var spinnerInitialCallback = true
+    private var spinnerUserAction = false
+    @Volatile private var detector: Detector? = null
+    @Volatile private var currentSpec: ModelSpec? = null
+    @Volatile private var loadError: String? = null
 
     private val requestCamera = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -52,8 +57,11 @@ class MainActivity : AppCompatActivity() {
         setContentView(binding.root)
 
         val (loaded, defaultId) = YoloNcnn.loadConfig(assets)
-        specs = loaded
-        specIndex = loaded.indexOfFirst { it.id == defaultId }.coerceAtLeast(0)
+        specs = loaded.filter { spec ->
+            spec.backend != "qnn" || QnnDetector.isSupported(applicationContext, spec)
+        }
+        check(specs.isNotEmpty()) { "models.json has no models supported on this device" }
+        specIndex = specs.indexOfFirst { it.id == defaultId }.coerceAtLeast(0)
 
         setupModelSpinner()
         loadSpec(specIndex)
@@ -76,16 +84,20 @@ class MainActivity : AppCompatActivity() {
 
         binding.modelSpinner.adapter = adapter
         binding.modelSpinner.setSelection(specIndex, false)
+        binding.modelSpinner.setOnTouchListener { _, event ->
+            if (event.action == MotionEvent.ACTION_DOWN) spinnerUserAction = true
+            false
+        }
         binding.modelSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
-                if (spinnerInitialCallback) {
-                    spinnerInitialCallback = false
-                    return
-                }
+                if (!spinnerUserAction) return
+                spinnerUserAction = false
                 if (position != specIndex) loadSpec(position)
             }
 
-            override fun onNothingSelected(parent: AdapterView<*>?) {}
+            override fun onNothingSelected(parent: AdapterView<*>?) {
+                spinnerUserAction = false
+            }
         }
     }
 
@@ -98,15 +110,30 @@ class MainActivity : AppCompatActivity() {
         val spec = specs[index]
         binding.statusText.text = "loading ${spec.displayName}…"
         analysisExecutor.execute {
-            val ok = YoloNcnn.init(assets, spec, useGpu = true)
-            switching.set(false)
+            val loadStarted = System.nanoTime()
+            detector?.close()
+            detector = null
+            currentSpec = null
+            val result = DetectorFactory.create(applicationContext, spec)
+            detector = result.detector
+            currentSpec = if (result.detector != null) spec else null
+            loadError = result.error?.let { "load failed: ${spec.displayName}\n$it" }
+            if (result.detector == null) Log.e("MainActivity", "load failed: ${spec.displayName}: ${result.error}")
+            val loadMs = (System.nanoTime() - loadStarted) / 1_000_000.0
             runOnUiThread {
+                frames = 0
+                lastFpsTs = 0L
+                warmupFrames = if (result.detector != null) 5 else 0
                 binding.overlay.setResults(emptyList(), 1, 1)
-                binding.statusText.text = if (ok) {
-                    "${spec.displayName}\n${backendLabel()}"
+                binding.statusText.text = if (result.detector != null) {
+                    "%s\n%s · loaded %.0f ms · warming up".format(
+                        spec.displayName, result.detector.backendLabel, loadMs
+                    )
                 } else {
-                    "load failed: ${spec.displayName}\nmissing ${spec.paramAsset} / ${spec.binAsset}?"
+                    "load failed: ${spec.displayName}\n${result.error}"
                 }
+                Log.i("MainActivity", "${spec.displayName} loaded in %.0f ms".format(loadMs))
+                switching.set(false)
             }
         }
     }
@@ -133,6 +160,7 @@ class MainActivity : AppCompatActivity() {
                 .setResolutionSelector(resolutionSelector)
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                 .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
+                .setOutputImageRotationEnabled(true)
                 .build()
                 .also { it.setAnalyzer(analysisExecutor, ::analyze) }
 
@@ -149,9 +177,9 @@ class MainActivity : AppCompatActivity() {
             return
         }
         try {
-            val bitmap = image.toUprightBitmap()
+            val bitmap = image.copyToBitmap()
             val started = System.nanoTime()
-            val detections = YoloNcnn.detect(bitmap)
+            val detections = detector?.detect(bitmap) ?: emptyList()
             val ms = (System.nanoTime() - started) / 1_000_000.0
 
             runOnUiThread {
@@ -166,22 +194,29 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun backendLabel(): String = when {
-        YoloNcnn.useGpu -> "GPU · Vulkan"
-        YoloNcnn.hasGpu() -> "CPU (GPU available)"
-        else -> "CPU (no Vulkan GPU)"
-    }
-
     private fun updateFps(inferMs: Double) {
+        if (detector == null) {
+            loadError?.let { binding.statusText.text = it }
+            return
+        }
+        if (warmupFrames > 0) {
+            warmupFrames--
+            if (warmupFrames == 0) {
+                frames = 0
+                lastFpsTs = System.currentTimeMillis()
+            }
+            return
+        }
         frames++
         val now = System.currentTimeMillis()
         if (lastFpsTs == 0L) lastFpsTs = now
         if (now - lastFpsTs >= 1000) {
             val fps = frames * 1000f / (now - lastFpsTs)
-            val name = YoloNcnn.currentSpec?.displayName ?: "model"
+            val name = currentSpec?.displayName ?: "model"
+            val backend = detector?.backendLabel ?: "-"
             binding.statusText.text =
-                "%s\n%s · %.1f FPS · %.0f ms".format(name, backendLabel(), fps, inferMs)
-            Log.i("MainActivity", "%s | %s | %.1f FPS | %.0f ms".format(name, backendLabel(), fps, inferMs))
+                "%s\n%s · %.1f FPS · %.0f ms".format(name, backend, fps, inferMs)
+            Log.i("MainActivity", "%s | %s | %.1f FPS | %.0f ms".format(name, backend, fps, inferMs))
             frames = 0
             lastFpsTs = now
         }
@@ -189,26 +224,29 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        analysisExecutor.execute {
+            detector?.close()
+            detector = null
+        }
         analysisExecutor.shutdown()
-    }
-}
-
-private fun ImageProxy.toUprightBitmap(): Bitmap {
-    val plane = planes[0]
-    val bmp = Bitmap.createBitmap(
-        plane.rowStride / plane.pixelStride,
-        height,
-        Bitmap.Config.ARGB_8888,
-    )
-    bmp.copyPixelsFromBuffer(plane.buffer)
-    val cropped = if (bmp.width != width) {
-        Bitmap.createBitmap(bmp, 0, 0, width, height)
-    } else {
-        bmp
+        cameraBitmap = null
     }
 
-    val rotation = imageInfo.rotationDegrees
-    if (rotation == 0) return cropped
-    val matrix = Matrix().apply { postRotate(rotation.toFloat()) }
-    return Bitmap.createBitmap(cropped, 0, 0, cropped.width, cropped.height, matrix, true)
+    private fun ImageProxy.copyToBitmap(): Bitmap {
+        val plane = planes[0]
+        val bufferWidth = plane.rowStride / plane.pixelStride
+        val reusable = cameraBitmap?.takeIf {
+            it.width == bufferWidth && it.height == height
+        } ?: Bitmap.createBitmap(bufferWidth, height, Bitmap.Config.ARGB_8888).also {
+            cameraBitmap = it
+        }
+
+        plane.buffer.rewind()
+        reusable.copyPixelsFromBuffer(plane.buffer)
+        return if (bufferWidth == width) {
+            reusable
+        } else {
+            Bitmap.createBitmap(reusable, 0, 0, width, height)
+        }
+    }
 }

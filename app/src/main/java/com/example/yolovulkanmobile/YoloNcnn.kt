@@ -3,6 +3,7 @@ package com.example.yolovulkanmobile
 import android.content.res.AssetManager
 import android.graphics.Bitmap
 import android.graphics.RectF
+import org.json.JSONArray
 import org.json.JSONObject
 
 data class Detection(
@@ -15,14 +16,17 @@ data class Detection(
 data class ModelSpec(
     val id: String,
     val displayName: String,
+    val backend: String,
     val paramAsset: String,
     val binAsset: String,
+    val modelAsset: String,
     val labels: List<String>,
     val inputName: String,
     val outputName: String,
     val targetSize: Int,
     val decoded: Boolean,
     val bgr: Boolean,
+    val boxesNormalized: Boolean,
     val confThreshold: Float,
     val nmsThreshold: Float,
 ) {
@@ -32,6 +36,7 @@ data class ModelSpec(
 object YoloNcnn {
 
     private const val CONFIG_ASSET = "models.json"
+    private const val EXAMPLE_CONFIG_ASSET = "models.example.json"
 
     init {
         System.loadLibrary("yolovulkan")
@@ -46,21 +51,30 @@ object YoloNcnn {
         private set
 
     fun loadConfig(assets: AssetManager): Pair<List<ModelSpec>, String> {
-        val root = JSONObject(assets.open(CONFIG_ASSET).bufferedReader().use { it.readText() })
+        val configText = runCatching {
+            assets.open(CONFIG_ASSET).bufferedReader().use { it.readText() }
+        }.getOrElse {
+            assets.open(EXAMPLE_CONFIG_ASSET).bufferedReader().use { it.readText() }
+        }
+        val root = JSONObject(configText)
         val arr = root.getJSONArray("models")
         val specs = (0 until arr.length()).map { i ->
             val o = arr.getJSONObject(i)
+            val backend = o.optString("backend", "ncnn")
             ModelSpec(
                 id = o.getString("id"),
                 displayName = o.optString("displayName", o.getString("id")),
-                paramAsset = o.getString("param"),
-                binAsset = o.getString("bin"),
+                backend = backend,
+                paramAsset = if (backend == "ncnn") o.getString("param") else o.optString("param"),
+                binAsset = if (backend == "ncnn") o.getString("bin") else o.optString("bin"),
+                modelAsset = if (backend == "qnn") o.getString("model") else o.optString("model"),
                 labels = readLabels(assets, o.get("labels")),
                 inputName = o.optString("inputName", "images"),
                 outputName = o.optString("outputName", "output"),
                 targetSize = o.optInt("targetSize", 640),
                 decoded = o.optBoolean("decoded", false),
                 bgr = o.optBoolean("bgr", true),
+                boxesNormalized = o.optBoolean("boxesNormalized", false),
                 confThreshold = o.optDouble("confThreshold", 0.25).toFloat(),
                 nmsThreshold = o.optDouble("nmsThreshold", 0.45).toFloat(),
             )
@@ -70,7 +84,7 @@ object YoloNcnn {
     }
 
     private fun readLabels(assets: AssetManager, node: Any): List<String> = when (node) {
-        is org.json.JSONArray -> (0 until node.length()).map { node.getString(it) }
+        is JSONArray -> (0 until node.length()).map { node.getString(it) }
         is String -> assets.open(node).bufferedReader().use { r ->
             r.readLines().map { it.trim() }.filter { it.isNotEmpty() }
         }
@@ -98,6 +112,10 @@ object YoloNcnn {
         nmsThreshold: Float,
     ): FloatArray
 
+    private external fun nativeRelease()
+
+    external fun nativePrecision(): String
+
     fun hasGpu(): Boolean = nativeHasGpu()
 
     @Synchronized
@@ -112,23 +130,14 @@ object YoloNcnn {
     }
 
     @Synchronized
+    fun release() {
+        nativeRelease()
+        currentSpec = null
+    }
+
+    @Synchronized
     fun detect(bitmap: Bitmap): List<Detection> {
         val spec = currentSpec ?: return emptyList()
-        val flat = nativeDetect(bitmap, spec.confThreshold, spec.nmsThreshold)
-        val out = ArrayList<Detection>(flat.size / 6)
-        var i = 0
-        while (i + 5 < flat.size) {
-            val label = flat[i + 4].toInt()
-            out.add(
-                Detection(
-                    rect = RectF(flat[i], flat[i + 1], flat[i] + flat[i + 2], flat[i + 1] + flat[i + 3]),
-                    label = label,
-                    score = flat[i + 5],
-                    labelName = spec.labels.getOrElse(label) { "id$label" },
-                )
-            )
-            i += 6
-        }
-        return out
+        return detectionsFromFlat(nativeDetect(bitmap, spec.confThreshold, spec.nmsThreshold), spec.labels)
     }
 }

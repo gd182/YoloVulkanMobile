@@ -2,8 +2,19 @@ plugins {
     alias(libs.plugins.android.application)
 }
 
+val qnnSdkRoot: String? = providers.gradleProperty("qnn.sdk.dir").orNull
+    ?: providers.environmentVariable("QNN_SDK_ROOT").orNull
+    ?: providers.fileContents(rootProject.layout.projectDirectory.file("local.properties"))
+        .asText.orNull
+        ?.lineSequence()
+        ?.map { it.trim() }
+        ?.firstOrNull { it.startsWith("qnn.sdk.dir=") }
+        ?.substringAfter("=")
+        ?.trim()
+
 android {
     namespace = "com.example.yolovulkanmobile"
+    ndkVersion = "28.2.13676358"
     compileSdk {
         version = release(37)
     }
@@ -21,6 +32,7 @@ android {
         externalNativeBuild {
             cmake {
                 arguments += "-DANDROID_STL=c++_shared"
+                if (!qnnSdkRoot.isNullOrEmpty()) arguments += "-DQNN_SDK_ROOT=$qnnSdkRoot"
                 cppFlags += "-std=c++17"
             }
         }
@@ -48,6 +60,12 @@ android {
     androidResources {
         noCompress += listOf("param", "bin")
     }
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+            excludes += listOf("**/libQnnDsp*.so", "**/libQnnGpu.so", "**/libQnnHtpPrepare.so")
+        }
+    }
 }
 
 dependencies {
@@ -61,5 +79,6 @@ dependencies {
     implementation(libs.androidx.camera.camera2)
     implementation(libs.androidx.camera.lifecycle)
     implementation(libs.androidx.camera.view)
+    implementation(libs.qnn.runtime)
     testImplementation(libs.junit)
 }

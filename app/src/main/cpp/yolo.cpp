@@ -4,9 +4,54 @@
 #include <cfloat>
 #include <cmath>
 #include <cstdio>
+#include <cstdint>
+#include <cstring>
 
 #include <cpu.h>
 #include <layer.h>
+
+static std::string detect_weight_precision(AAssetManager* mgr, const std::string& asset_name)
+{
+    AAsset* asset = AAssetManager_open(mgr, asset_name.c_str(), AASSET_MODE_STREAMING);
+    if (!asset)
+        return "UNKNOWN";
+
+    bool has_fp16 = false;
+    bool has_bf16 = false;
+    bool has_int8 = false;
+    uint8_t buffer[64 * 1024];
+
+    for (;;)
+    {
+        const int bytes_read = AAsset_read(asset, buffer, sizeof(buffer));
+        if (bytes_read <= 0)
+            break;
+
+        for (int offset = 0; offset + 4 <= bytes_read; offset += 4)
+        {
+            uint32_t tag;
+            std::memcpy(&tag, buffer + offset, sizeof(tag));
+            if (tag == 0x01306B47u)
+                has_fp16 = true;
+            else if (tag == 0x01348B83u)
+                has_bf16 = true;
+            else if (tag == 0x000D4B38u)
+                has_int8 = true;
+        }
+    }
+    AAsset_close(asset);
+
+    const int detected_types = (has_fp16 ? 1 : 0) + (has_bf16 ? 1 : 0) + (has_int8 ? 1 : 0);
+    if (detected_types > 1)
+        return "MIXED";
+    if (has_int8)
+        return "INT8";
+    if (has_fp16)
+        return "FP16";
+    if (has_bf16)
+        return "BF16";
+    return "FP32";
+}
 
 static inline float sigmoid(float x)
 {
@@ -214,6 +259,7 @@ int Yolo::load(AAssetManager* mgr, const ModelSpec& _spec, bool use_gpu)
     workspace_pool_allocator.clear();
 
     spec = _spec;
+    precision = detect_weight_precision(mgr, spec.bin_asset);
 
     ncnn::set_cpu_powersave(2);
     ncnn::set_omp_num_threads(ncnn::get_big_cpu_count());
@@ -275,7 +321,7 @@ int Yolo::detect(const unsigned char* rgba, int width, int height,
     ncnn::copy_make_border(in, in_pad,
                            hpad / 2, hpad - hpad / 2,
                            wpad / 2, wpad - wpad / 2,
-                           ncnn::BORDER_CONSTANT, 0.f);
+                           ncnn::BORDER_CONSTANT, spec.decoded ? 114.f : 0.f);
 
     const float norm_vals[3] = {1 / 255.f, 1 / 255.f, 1 / 255.f};
     in_pad.substract_mean_normalize(nullptr, norm_vals);
